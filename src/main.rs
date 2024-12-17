@@ -1,12 +1,12 @@
 use std::env;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use dotenv::dotenv;
 use lettre::message::Message;
 use lettre::{ Transport, SmtpTransport };
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::message::header::ContentType;
-use chrono::NaiveDate;
+
+mod db;
+mod user_db;
 
 #[tokio::main]
 async fn main() {
@@ -19,60 +19,31 @@ async fn main() {
     let subject = "Test Email from Rust";
     let body = "Hello this is a test email from the Rust";
 
+    let conn = db::setup_db().expect("Could not setup database");
+    let users = user_db::get_all_users(&conn).expect("Could not get users");
+
     let mailer = SmtpTransport::relay(&*smtp_server)
         .unwrap()
         .credentials(Credentials::from((email_user.clone(), email_password)))  // Add the credentials
         .build();
 
-    let file_path = "recipients.txt";
-    if let Ok(file) = File::open(file_path) {
-        let reader: BufReader<File> = BufReader::new(file);
+    for (name, email) in users {
+        let email_msg = Message::builder()
+            .from(email_user.parse().unwrap())
+            .to(email.parse().unwrap())
+            .subject(subject)
+            .header(ContentType::TEXT_PLAIN)
+            .body(body.to_owned())
+            .unwrap();
 
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    let parts: Vec<&str> = line.split(',').collect();
-
-                    if parts.len() != 4 {
-                        // @todo: log
-                        eprintln!("Invalid line received");
-                    }
-                    let id = parts[0].to_string();
-                    let name = parts[1].to_string();
-                    let email = parts[2].to_string();
-                    let last_sent_date = parts[3].to_string();
-
-                    let last_sent_date =
-                        NaiveDate::parse_from_str(last_sent_date.as_str(), "%Y-%m-%d").unwrap();
-
-                    let email_msg = Message::builder()
-                        .from(email_user.parse().unwrap())
-                        .to(email.parse().unwrap())
-                        .subject(subject)
-                        .header(ContentType::TEXT_PLAIN)
-                        .body(body.to_owned())
-                        .unwrap();
-
-                    match mailer.send(&email_msg) {
-                        Ok(_) => {
-                            println!("Email sent to : {} on address {}", name, email);
-                        },
-                        Err(e) => {
-                            // @todo: log
-                            eprintln!("Failed to send email to {}: {}", name, e);
-                        }
-                    }
-
-                },
-                Err(e) => {
-                    // @todo: log
-                    eprintln!("Error reading line: {:?}", e);
-                    continue;
-                }
+        match mailer.send(&email_msg) {
+            Ok(_) => {
+                println!("Email sent to : {} on address {}", name, email);
+            },
+            Err(e) => {
+                // @todo: log
+                eprintln!("Failed to send email to {}: {}", name, e);
             }
         }
-    } else {
-        // @todo: log
-        eprintln!("Couldn't open file {}", file_path);
     }
 }
