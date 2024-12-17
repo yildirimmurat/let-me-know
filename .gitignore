@@ -1,0 +1,8 @@
+test.*
+*.txt
+*.pem
+*/target/
+target/
+*.lock
+.env
+.idea/
