@@ -1,1 +1,1 @@
-Script which would send email to the re.env
+Script which would send email to the recipients
