@@ -5,9 +5,11 @@ use lettre::message::Message;
 use lettre::{ Transport, SmtpTransport };
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::message::header::ContentType;
+use reqwest::Client;
 
 mod db;
 mod user_db;
+mod product_db;
 
 #[tokio::main]
 async fn main() {
@@ -17,7 +19,6 @@ async fn main() {
     let email_password: String = env::var("EMAIL_PASSWORD").expect("EMAIL_PASSWORD is not set");
     let smtp_server: String = env::var("SMTP_SERVER").expect("SMTP_SERVER is not set");
     let subject = "Test Email from Rust";
-    let body = "Hello this is a test email from the Rust";
 
     let send_delta_days: i64 = env::var("SEND_DELTA_DAYS").expect("SEND_DELTA_DAYS is not set").parse::<i64>().unwrap();
     let today = Utc::now().date_naive();
@@ -30,37 +31,47 @@ async fn main() {
         .credentials(Credentials::from((email_user.clone(), email_password)))  // Add the credentials
         .build();
 
-    for user in users {
-        if let Some(last_sent_date) = user.last_sent_date {
-            match NaiveDate::parse_from_str(&last_sent_date, "%Y-%m-%d") {
-                Ok(date) => {
-                    let days_since_last_sent = today.signed_duration_since(date).num_days();
+    let client = Client::new();
+    let active_products = product_db::fetch_active_products(&conn, &client).await.unwrap();
 
-                    if days_since_last_sent < send_delta_days {
-                        continue;
+    for product in active_products {
+        for user in &users {
+            if let Some(last_sent_date) = &user.last_sent_date {
+                match NaiveDate::parse_from_str(&last_sent_date, "%Y-%m-%d") {
+                    Ok(date) => {
+                        let days_since_last_sent = today.signed_duration_since(date).num_days();
+
+                        if days_since_last_sent < send_delta_days {
+                            continue;
+                        }
+                    },
+                    Err(_) => {
+                        eprintln!("Could not parse last sent date");
                     }
+                }
+            }
+            let personalized_body = format!(
+                "Hello {}, \n\nWe have an active product available: {}\nCheck it out here: {}\n\nBest regards",
+                user.name, product.name, product.search_url
+            );
+            let email_msg = Message::builder()
+                .from(email_user.parse().unwrap())
+                .to(user.email.parse().unwrap())
+                .subject(subject)
+                .header(ContentType::TEXT_PLAIN)
+                .body(personalized_body)
+                .unwrap();
+
+            match mailer.send(&email_msg) {
+                Ok(_) => {
+                    println!("Email sent to : {} on address {}", user.name, user.email);
                 },
-                Err(_) => {
-                    eprintln!("Could not parse last sent date");
+                Err(e) => {
+                    // @todo: log
+                    eprintln!("Failed to send email to {}: {}", user.name, e);
                 }
             }
         }
-        let email_msg = Message::builder()
-            .from(email_user.parse().unwrap())
-            .to(user.email.parse().unwrap())
-            .subject(subject)
-            .header(ContentType::TEXT_PLAIN)
-            .body(body.to_owned())
-            .unwrap();
-
-        match mailer.send(&email_msg) {
-            Ok(_) => {
-                println!("Email sent to : {} on address {}", user.name, user.email);
-            },
-            Err(e) => {
-                // @todo: log
-                eprintln!("Failed to send email to {}: {}", user.name, e);
-            }
-        }
     }
+
 }
